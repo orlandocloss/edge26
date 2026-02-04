@@ -26,7 +26,8 @@ class Detection:
 
 def is_cohesive_blob(fg_mask_region: np.ndarray, bbox_area: int, 
                      min_largest_blob_ratio: float = 0.80, 
-                     max_num_blobs: int = 5) -> Tuple[bool, Optional[Dict]]:
+                     max_num_blobs: int = 5,
+                     min_motion_ratio: float = 0.15) -> Tuple[bool, Optional[Dict]]:
     """
     Check if motion in a region is cohesive (insect) vs scattered (plant).
     
@@ -35,6 +36,7 @@ def is_cohesive_blob(fg_mask_region: np.ndarray, bbox_area: int,
         bbox_area: Area of bounding box
         min_largest_blob_ratio: Min ratio of largest blob to total motion
         max_num_blobs: Max number of blobs allowed
+        min_motion_ratio: Min ratio of motion pixels to bbox area
         
     Returns:
         tuple: (is_cohesive, metrics_dict or None)
@@ -45,7 +47,7 @@ def is_cohesive_blob(fg_mask_region: np.ndarray, bbox_area: int,
         return False, None
     
     motion_ratio = motion_pixels / bbox_area
-    if motion_ratio < 0.15:
+    if motion_ratio < min_motion_ratio:
         return False, None
     
     contours, _ = cv2.findContours(fg_mask_region, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -134,7 +136,8 @@ class MotionDetector:
         )
         
         # Morphological kernel for noise removal
-        self.morph_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        kernel_size = config.get("morph_kernel_size", 3)
+        self.morph_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
     
     def detect(self, frame: np.ndarray, frame_number: int) -> Tuple[List[Detection], np.ndarray]:
         """
@@ -180,7 +183,8 @@ class MotionDetector:
                 region,
                 w * h,
                 self.config["min_largest_blob_ratio"],
-                self.config["max_num_blobs"]
+                self.config["max_num_blobs"],
+                self.config.get("min_motion_ratio", 0.15)
             )
             
             if not is_cohesive:
@@ -292,7 +296,7 @@ def analyze_path_topology(path: List[Tuple[float, float]], params: dict) -> Tupl
     path_arr = np.array(path)
     
     net_displacement = float(np.linalg.norm(path_arr[-1] - path_arr[0]))
-    revisit_ratio = calculate_revisit_ratio(path_arr)
+    revisit_ratio = calculate_revisit_ratio(path_arr, params.get("revisit_radius", 50))
     progression_ratio = calculate_progression_ratio(path_arr)
     directional_variance = calculate_directional_variance(path_arr)
     
@@ -314,7 +318,8 @@ def analyze_path_topology(path: List[Tuple[float, float]], params: dict) -> Tupl
 
 
 def check_track_consistency(prev_pos: Tuple[float, float], curr_pos: Tuple[float, float],
-                           prev_area: float, curr_area: float, max_frame_jump: int) -> bool:
+                           prev_area: float, curr_area: float, max_frame_jump: int,
+                           max_area_change_ratio: float = 3.0) -> bool:
     """
     Check if track update is consistent (not a bad match).
     
@@ -324,6 +329,7 @@ def check_track_consistency(prev_pos: Tuple[float, float], curr_pos: Tuple[float
         prev_area: Previous bounding box area
         curr_area: Current bounding box area
         max_frame_jump: Maximum allowed position jump
+        max_area_change_ratio: Maximum allowed area change ratio
         
     Returns:
         bool: True if consistent, False if likely bad match
@@ -333,9 +339,9 @@ def check_track_consistency(prev_pos: Tuple[float, float], curr_pos: Tuple[float
     if frame_jump > max_frame_jump:
         return False
     
-    # Size change check (3x threshold)
+    # Size change check
     area_ratio = max(curr_area, prev_area) / (min(curr_area, prev_area) + 1e-6)
-    if area_ratio > 3.0:
+    if area_ratio > max_area_change_ratio:
         return False
     
     return True

@@ -40,6 +40,9 @@ detection:
   gmm_history: 500
   gmm_var_threshold: 16
   
+  # Morphological filtering
+  morph_kernel_size: 3                # Noise removal kernel size (NxN)
+  
   # Shape filters
   min_area: 200                       # Min contour area (px²)
   max_area: 40000                     # Max contour area (px²)
@@ -49,9 +52,11 @@ detection:
   # Cohesiveness (distinguishes insects from plant motion)
   min_largest_blob_ratio: 0.80        # Min ratio of largest blob to total
   max_num_blobs: 5                    # Max blobs in detection region
+  min_motion_ratio: 0.15              # Min motion pixels / bbox area
   
   # Track consistency
   max_frame_jump: 100                 # Max pixels between frames
+  max_area_change_ratio: 3.0          # Max area change between frames
   
   # Path topology (for confirming insects)
   min_path_points: 10                 # Min points for topology analysis
@@ -59,6 +64,7 @@ detection:
   max_revisit_ratio: 0.30             # Max revisit ratio (plant = high)
   min_progression_ratio: 0.70         # Min forward progression (plant = low)
   max_directional_variance: 0.90      # Max heading variance (plant = high)
+  revisit_radius: 50                  # Radius (px) for revisit detection
 
 # =============================================================================
 # CLASSIFICATION (Hailo - Family/Genus/Species)

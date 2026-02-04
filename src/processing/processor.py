@@ -171,7 +171,8 @@ class VideoProcessor:
                     
                     if not check_track_consistency(
                         prev_pos, (cx, cy), prev_area, area,
-                        self.detection_config["max_frame_jump"]
+                        self.detection_config["max_frame_jump"],
+                        self.detection_config.get("max_area_change_ratio", 3.0)
                     ):
                         # Reset track path
                         self.track_paths[track_id] = []
