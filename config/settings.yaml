@@ -1,0 +1,86 @@
+# =============================================================================
+# EDGE26 CONFIGURATION
+# =============================================================================
+# Edit this file, then run: python main.py --config config/settings.yaml
+# All paths are relative to edge26/ directory unless absolute
+
+# =============================================================================
+# PIPELINE MODE
+# =============================================================================
+pipeline:
+  enable_recording: true              # Enable continuous video recording
+  enable_processing: true             # Enable detection/tracking/classification
+  # Modes:
+  #   Both true   = Record + process asynchronously (default)
+  #   Recording   = Only record videos (no processing)
+  #   Processing  = Only process existing videos (no recording)
+
+# =============================================================================
+# PATHS
+# =============================================================================
+paths:
+  video_storage: "/mnt/usb/videos"    # External USB for temp video storage
+  logs_dir: "output/logs"             # Log files directory
+
+# =============================================================================
+# CAPTURE
+# =============================================================================
+capture:
+  device_id: "edge26"                 # Device identifier in filenames
+  camera_index: 0                     # Camera device index
+  use_picamera: true                  # true=Raspberry Pi, false=USB camera
+  fps: 30                             # Frames per second
+  chunk_duration_seconds: 60          # Video chunk length (1 minute)
+
+# =============================================================================
+# DETECTION (Motion-based)
+# =============================================================================
+detection:
+  # GMM Background Subtractor
+  gmm_history: 500
+  gmm_var_threshold: 16
+  
+  # Shape filters
+  min_area: 200                       # Min contour area (px²)
+  max_area: 40000                     # Max contour area (px²)
+  min_density: 3.0                    # Min area/perimeter ratio
+  min_solidity: 0.55                  # Min convex hull fill ratio
+  
+  # Cohesiveness (distinguishes insects from plant motion)
+  min_largest_blob_ratio: 0.80        # Min ratio of largest blob to total
+  max_num_blobs: 5                    # Max blobs in detection region
+  
+  # Track consistency
+  max_frame_jump: 100                 # Max pixels between frames
+  
+  # Path topology (for confirming insects)
+  min_path_points: 10                 # Min points for topology analysis
+  min_displacement: 50                # Min net displacement (px)
+  max_revisit_ratio: 0.30             # Max revisit ratio (plant = high)
+  min_progression_ratio: 0.70         # Min forward progression (plant = low)
+  max_directional_variance: 0.90      # Max heading variance (plant = high)
+
+# =============================================================================
+# CLASSIFICATION (Hailo - Family/Genus/Species)
+# =============================================================================
+classification:
+  model: "data/models/classifier.hef" # Path to HEF model
+  normalize: false                    # true=ImageNet normalization, false=uint8
+  # input_size: [64, 64]              # Override model input size [H, W]
+
+# =============================================================================
+# TRACKING (Hungarian algorithm)
+# =============================================================================
+tracking:
+  w_dist: 0.6                         # Distance weight in cost function
+  w_area: 0.4                         # Area weight in cost function
+  cost_threshold: 0.3                 # Max cost for valid match
+  max_lost_frames: 45                 # Frames before track deleted (~1.5s @30fps)
+
+# =============================================================================
+# OUTPUT
+# =============================================================================
+output:
+  results_dir: "output/results"       # JSON results directory
+  save_crops: true                    # Save crop images per detection
+  crops_subdir: "crops"               # Subdirectory for crops

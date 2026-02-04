@@ -1,0 +1,29 @@
+# Edge26 Dependencies
+# -------------------
+
+# Core
+numpy>=1.21.0
+opencv-python>=4.5.0
+
+# Deep Learning
+torch>=2.0.0
+torchvision>=0.15.0
+ultralytics>=8.0.0  # YOLO
+
+# Async Processing
+asyncio-mqtt>=0.16.0
+
+# Configuration
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# Data & Output
+pandas>=2.0.0
+
+# Logging
+loguru>=0.7.0
+
+# Testing
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+

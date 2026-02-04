@@ -1,0 +1,35 @@
+# Output (generated at runtime)
+output/results/*
+output/logs/*
+!output/**/.gitkeep
+
+# Model weights (large files - download separately)
+data/models/*.hef
+data/models/*.pt
+data/models/*.onnx
+data/models/*.pth
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Environment
+.env
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
