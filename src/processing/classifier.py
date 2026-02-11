@@ -352,24 +352,24 @@ class HailoClassifier:
         """Run inference and return outputs."""
         configured = self._configured_model
         
-            # Get output info
-            output_infos = self._hef.get_output_vstream_infos()
-            
-        # Create output buffers (zeros so any unwritten region is 0, not NaN)
-            output_buffers = {}
-            for info in output_infos:
-                shape = self._infer_model.output(info.name).shape
-            output_buffers[info.name] = np.zeros(shape, dtype=np.float32)
-            
-            # Create bindings
-            bindings = configured.create_bindings(output_buffers=output_buffers)
-            
-            # Prepare input - ensure correct shape (add batch dim if needed)
-            if preprocessed.ndim == 3:
-                # HWC -> add batch -> NHWC
-                preprocessed = np.expand_dims(preprocessed, 0)
-            
-            bindings.input().set_buffer(np.ascontiguousarray(preprocessed))
+        # Get output info
+        output_infos = self._hef.get_output_vstream_infos()
+        
+    # Create output buffers (zeros so any unwritten region is 0, not NaN)
+        output_buffers = {}
+        for info in output_infos:
+            shape = self._infer_model.output(info.name).shape
+        output_buffers[info.name] = np.zeros(shape, dtype=np.float32)
+        
+        # Create bindings
+        bindings = configured.create_bindings(output_buffers=output_buffers)
+        
+        # Prepare input - ensure correct shape (add batch dim if needed)
+        if preprocessed.ndim == 3:
+            # HWC -> add batch -> NHWC
+            preprocessed = np.expand_dims(preprocessed, 0)
+        
+        bindings.input().set_buffer(np.ascontiguousarray(preprocessed))
             
         # Run (timeout in milliseconds)
         configured.run([bindings], timeout=10000)
