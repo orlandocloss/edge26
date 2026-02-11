@@ -251,8 +251,8 @@ class HailoClassifier:
             
             bindings.input().set_buffer(np.ascontiguousarray(preprocessed))
             
-            # Run
-            configured.run([bindings])
+            # Run (timeout in milliseconds)
+            configured.run([bindings], timeout=10000)
             
             # Get outputs in order
             outputs = [bindings.output(info.name).get_buffer() for info in output_infos]
