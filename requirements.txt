@@ -2,7 +2,7 @@
 # -------------------
 
 # Core
-numpy>=1.21.0
+numpy>=1.21.0,<2
 opencv-python>=4.5.0
 
 # Deep Learning
