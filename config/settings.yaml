@@ -71,6 +71,7 @@ detection:
 # =============================================================================
 classification:
   model: "data/models/classifier.hef" # Path to HEF model
+  labels: "data/models/labels.txt"    # Species list (one per line, same order as training)
   normalize: false                    # true=ImageNet normalization, false=uint8
   # input_size: [64, 64]              # Override model input size [H, W]
 
