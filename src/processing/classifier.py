@@ -229,33 +229,34 @@ class HailoClassifier:
     
     def _run_inference(self, preprocessed: np.ndarray) -> List[np.ndarray]:
         """Run inference and return outputs."""
-        with self._configured_model as configured:
-            # Get output info
-            output_infos = self._hef.get_output_vstream_infos()
-            
-            # Create output buffers
-            output_buffers = {}
-            for info in output_infos:
-                shape = self._infer_model.output(info.name).shape
-                dtype_str = str(info.format.type).split(".")[-1].lower()
-                dtype = getattr(np, dtype_str, np.float32)
-                output_buffers[info.name] = np.empty(shape, dtype=dtype)
-            
-            # Create bindings
-            bindings = configured.create_bindings(output_buffers=output_buffers)
-            
-            # Prepare input - ensure correct shape (add batch dim if needed)
-            if preprocessed.ndim == 3:
-                # HWC -> add batch -> NHWC
-                preprocessed = np.expand_dims(preprocessed, 0)
-            
-            bindings.input().set_buffer(np.ascontiguousarray(preprocessed))
-            
-            # Run (timeout in milliseconds)
-            configured.run([bindings], timeout=10000)
-            
-            # Get outputs in order
-            outputs = [bindings.output(info.name).get_buffer() for info in output_infos]
+        configured = self._configured_model
+        
+        # Get output info
+        output_infos = self._hef.get_output_vstream_infos()
+        
+        # Create output buffers
+        output_buffers = {}
+        for info in output_infos:
+            shape = self._infer_model.output(info.name).shape
+            dtype_str = str(info.format.type).split(".")[-1].lower()
+            dtype = getattr(np, dtype_str, np.float32)
+            output_buffers[info.name] = np.empty(shape, dtype=dtype)
+        
+        # Create bindings
+        bindings = configured.create_bindings(output_buffers=output_buffers)
+        
+        # Prepare input - ensure correct shape (add batch dim if needed)
+        if preprocessed.ndim == 3:
+            # HWC -> add batch -> NHWC
+            preprocessed = np.expand_dims(preprocessed, 0)
+        
+        bindings.input().set_buffer(np.ascontiguousarray(preprocessed))
+        
+        # Run (timeout in milliseconds)
+        configured.run([bindings], timeout=10000)
+        
+        # Get outputs in order
+        outputs = [bindings.output(info.name).get_buffer() for info in output_infos]
         
         return outputs
     
