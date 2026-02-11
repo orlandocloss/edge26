@@ -7,6 +7,7 @@ Usage:
 
 import argparse
 import logging
+import os
 import queue
 import signal
 import sys
@@ -378,10 +379,10 @@ Examples:
             logger.info("Ctrl+C received - stopping recording")
             pipeline.stop_recording()
         else:
-            # Second Ctrl+C: Force stop everything
+            # Second Ctrl+C: Force stop everything immediately
             logger.info("Second Ctrl+C - forcing shutdown")
-            pipeline.stop()
-            sys.exit(0)
+            pipeline.stop_event.set()
+            os._exit(1)
     
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
