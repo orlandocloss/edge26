@@ -197,9 +197,9 @@ class HailoClassifier:
         # Convert BGR to RGB
         rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
         
-        # Get target size from model
+        # Get target size from model - shape is (H, W, C) from Hailo vstream info
         input_size = self._get_input_size()
-        target_h, target_w = input_size[1], input_size[2]  # HWC format from Hailo
+        target_h, target_w = input_size[0], input_size[1]
         
         # Resize directly to model input size
         resized = cv2.resize(rgb, (target_w, target_h))
