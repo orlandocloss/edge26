@@ -10,6 +10,8 @@ Matches exact functionality of inference.py HierarchicalInsectClassifier.
 import cv2
 import numpy as np
 import logging
+import requests
+import sys
 from typing import Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +31,99 @@ class HierarchicalClassification:
     family_probs: List[float] = field(default_factory=list)
     genus_probs: List[float] = field(default_factory=list)
     species_probs: List[float] = field(default_factory=list)
+
+
+def get_taxonomy(species_list):
+    """
+    Retrieves taxonomic information for a list of species from GBIF API.
+    Creates a hierarchical taxonomy dictionary with family, genus, and species relationships.
+    """
+    taxonomy = {1: [], 2: {}, 3: {}}
+    
+    species_list_for_gbif = [s for s in species_list if s.lower() != 'unknown']
+    has_unknown = len(species_list_for_gbif) != len(species_list)
+    
+    logger.info(f"Building taxonomy from GBIF for {len(species_list_for_gbif)} species")
+    
+    print("\nTaxonomy Results:")
+    print("-" * 80)
+    print(f"{'Species':<30} {'Family':<20} {'Genus':<20} {'Status'}")
+    print("-" * 80)
+    
+    for species_name in species_list_for_gbif:
+        url = f"https://api.gbif.org/v1/species/match?name={species_name}&verbose=true"
+        try:
+            response = requests.get(url)
+            data = response.json()
+            
+            if data.get('status') == 'ACCEPTED' or data.get('status') == 'SYNONYM':
+                family = data.get('family')
+                genus = data.get('genus')
+                
+                if family and genus:
+                    status = "OK"
+                    
+                    print(f"{species_name:<30} {family:<20} {genus:<20} {status}")
+                    
+                    taxonomy[3][species_name] = genus
+                    taxonomy[2][genus] = family
+                    
+                    if family not in taxonomy[1]:
+                        taxonomy[1].append(family)
+                else:
+                    error_msg = f"Species '{species_name}' found in GBIF but family and genus not found, could be spelling error in species, check GBIF"
+                    logger.error(error_msg)
+                    print(f"{species_name:<30} {'Not found':<20} {'Not found':<20} ERROR")
+                    print(f"Error: {error_msg}")
+                    sys.exit(1)
+            else:
+                error_msg = f"Species '{species_name}' not found in GBIF, could be spelling error, check GBIF"
+                logger.error(error_msg)
+                print(f"{species_name:<30} {'Not found':<20} {'Not found':<20} ERROR")
+                print(f"Error: {error_msg}")
+                sys.exit(1)
+                
+        except Exception as e:
+            error_msg = f"Error retrieving data for species '{species_name}': {str(e)}"
+            logger.error(error_msg)
+            print(f"{species_name:<30} {'Error':<20} {'Error':<20} FAILED")
+            print(f"Error: {error_msg}")
+            sys.exit(1)
+
+    if has_unknown:
+        unknown_family = "Unknown"
+        unknown_genus = "Unknown"
+        unknown_species = "unknown"
+        
+        if unknown_family not in taxonomy[1]:
+            taxonomy[1].append(unknown_family)
+        
+        taxonomy[2][unknown_genus] = unknown_family
+        taxonomy[3][unknown_species] = unknown_genus
+        
+        print(f"{unknown_species:<30} {unknown_family:<20} {unknown_genus:<20} {'OK'}")
+    
+    taxonomy[1] = sorted(list(set(taxonomy[1])))
+    print("-" * 80)
+    
+    num_families = len(taxonomy[1])
+    num_genera = len(taxonomy[2])
+    num_species = len(taxonomy[3])
+    
+    print("\nFamily indices:")
+    for i, family in enumerate(taxonomy[1]):
+        print(f"  {i}: {family}")
+    
+    print("\nGenus indices:")
+    for i, genus in enumerate(sorted(taxonomy[2].keys())):
+        print(f"  {i}: {genus}")
+    
+    print("\nSpecies indices:")
+    for i, species in enumerate(species_list):
+        print(f"  {i}: {species}")
+    
+    logger.info(f"Taxonomy built: {num_families} families, {num_genera} genera, {num_species} species")
+    return taxonomy
 
 
 class HailoClassifier:
@@ -107,15 +202,42 @@ class HailoClassifier:
     
     def _load_labels(self) -> None:
         """
-        Extract class labels from model output shapes.
-        
-        Labels are embedded in model - we just need the counts
-        to create numeric indices. Actual class names come from
-        model output layer names or are indices.
+        Load species labels from a plain text file (one species per line),
+        then build taxonomy (family/genus) from GBIF API.
         """
-        output_infos = self._hef.get_output_vstream_infos()
+        labels_path = self.config.get("labels")
+        if not labels_path:
+            logger.warning("No 'labels' path in classification config - using numeric indices")
+            self._load_labels_fallback()
+            return
         
-        # Extract class counts from each output head
+        labels_path = Path(labels_path)
+        if not labels_path.exists():
+            logger.warning(f"Labels file not found: {labels_path} - using numeric indices")
+            self._load_labels_fallback()
+            return
+        
+        # Read species list (one per line, same order as training)
+        with open(labels_path) as f:
+            self.species_list = [line.strip() for line in f if line.strip()]
+        
+        logger.info(f"Loaded {len(self.species_list)} species from {labels_path}")
+        
+        # Build taxonomy from GBIF
+        taxonomy = get_taxonomy(self.species_list)
+        
+        self.family_list = taxonomy[1]                          # sorted families
+        self.genus_list = sorted(taxonomy[2].keys())            # sorted genera
+        self.species_to_genus = taxonomy[3]                     # species -> genus
+        self.genus_to_family = taxonomy[2]                      # genus -> family
+        
+        logger.info(f"Taxonomy: {len(self.family_list)} families, "
+                    f"{len(self.genus_list)} genera, "
+                    f"{len(self.species_list)} species")
+    
+    def _load_labels_fallback(self) -> None:
+        """Fall back to numeric indices from model output shapes."""
+        output_infos = self._hef.get_output_vstream_infos()
         for i, info in enumerate(output_infos):
             num_classes = info.shape[-1]
             if i == 0:
@@ -125,7 +247,6 @@ class HailoClassifier:
             else:
                 self.species_list = [f"class_{j}" for j in range(num_classes)]
         
-        # If only one output, treat as species-only model
         if len(output_infos) == 1:
             num_classes = output_infos[0].shape[-1]
             self.species_list = [f"class_{j}" for j in range(num_classes)]
@@ -234,13 +355,11 @@ class HailoClassifier:
         # Get output info
         output_infos = self._hef.get_output_vstream_infos()
         
-        # Create output buffers
+        # Create output buffers (zeros so any unwritten region is 0, not NaN)
         output_buffers = {}
         for info in output_infos:
             shape = self._infer_model.output(info.name).shape
-            dtype_str = str(info.format.type).split(".")[-1].lower()
-            dtype = getattr(np, dtype_str, np.float32)
-            output_buffers[info.name] = np.empty(shape, dtype=dtype)
+            output_buffers[info.name] = np.zeros(shape, dtype=np.float32)
         
         # Create bindings
         bindings = configured.create_bindings(output_buffers=output_buffers)
@@ -255,8 +374,8 @@ class HailoClassifier:
         # Run (timeout in milliseconds)
         configured.run([bindings], timeout=10000)
         
-        # Get outputs in order
-        outputs = [bindings.output(info.name).get_buffer() for info in output_infos]
+        # Read results from the output buffers (run() writes into them in-place)
+        outputs = [output_buffers[info.name] for info in output_infos]
         
         return outputs
     
