@@ -2,6 +2,8 @@
 
 Continuous video capture with asynchronous insect detection, classification, and tracking.
 
+Uses [**BugSpot**](../bugspot/) for the shared detection and tracking pipeline, with Hailo HEF models for on-device classification.
+
 ## Quick Start
 
 ```bash
@@ -37,10 +39,12 @@ Recording Thread                    Processing Thread
 
 ## Pipeline Phases
 
-1. **Detection** - Motion-based (GMM) with shape/cohesiveness filters
-2. **Topology Analysis** - Confirms insects by path characteristics
-3. **Classification** - Hailo HEF model (Family/Genus/Species)
-4. **Aggregation** - Hierarchical voting across frames
+1. **Detection** - Motion-based (GMM) with shape/cohesiveness filters *(BugSpot)*
+2. **Tracking** - Hungarian algorithm with lost track recovery *(BugSpot)*
+3. **Topology Analysis** - Confirms insects by path characteristics *(BugSpot)*
+4. **Crop Extraction + Composites** - Per-track outputs *(BugSpot)*
+5. **Classification** - Hailo HEF model (Family/Genus/Species) *(edge26)*
+6. **Aggregation** - Hierarchical voting across frames *(edge26)*
 
 Tracks persist across video boundaries (same insect = same ID).
 

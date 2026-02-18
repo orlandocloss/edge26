@@ -1,35 +1,33 @@
 """
-Processing module - detection, classification, and tracking.
+Processing module.
 
-Provides:
-    VideoProcessor: Main orchestrator for video processing
-    MotionDetector: GMM-based motion detection with shape/cohesiveness filters
-    HailoClassifier: Hierarchical classification (family, genus, species)
-    InsectTracker: Persistent tracking across videos
-    
-    Path topology functions for confirming insects:
-    - analyze_path_topology
-    - check_track_consistency
+Core detection and tracking provided by BugSpot.
+Classification via Hailo HEF models (edge26-specific).
 """
 
 from .processor import VideoProcessor
-from .detector import (
-    MotionDetector, 
+from .classifier import HailoClassifier, HierarchicalClassification
+
+# Re-exports from bugspot for convenience
+from bugspot import (
+    MotionDetector,
     Detection,
+    InsectTracker,
+    Track,
+    DetectionPipeline,
     analyze_path_topology,
     check_track_consistency,
 )
-from .classifier import HailoClassifier, HierarchicalClassification
-from .tracker import InsectTracker, Track
 
 __all__ = [
     "VideoProcessor",
-    "MotionDetector", 
-    "Detection",
     "HailoClassifier",
     "HierarchicalClassification",
+    "MotionDetector",
+    "Detection",
     "InsectTracker",
     "Track",
+    "DetectionPipeline",
     "analyze_path_topology",
     "check_track_consistency",
 ]
