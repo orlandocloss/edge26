@@ -5,28 +5,50 @@
 # All paths are relative to edge26/ directory unless absolute
 
 # =============================================================================
+# DEVICE
+# =============================================================================
+# Two device types work together:
+#   FLICK  - Full pipeline (detect + classify). Also classifies DOT data.
+#   DOT    - Detection only. Sends crops/composites to a FLICK for classification.
+# DOTs send directories to the same input_storage path. The FLICK identifies
+# them by matching directory names against dot_ids.
+device:
+  flick_id: "flick01"                 # This FLICK's identifier (used in filenames + output)
+  dot_ids: ["dot01", "dot02"]         # Known DOT devices that send data to this FLICK
+
+# =============================================================================
 # PIPELINE MODE
 # =============================================================================
 pipeline:
   enable_recording: true              # Enable continuous video recording
   enable_processing: true             # Enable detection/tracking/classification
+  enable_classification: true         # Enable Hailo classification (false = detection only, N/A predictions)
+  continuous_tracking: true           # true = tracks persist across video chunks, false = reset each video
+  recording_mode: "continuous"        # "continuous" = no gaps, "interval" = record every N minutes
+  recording_interval_minutes: 5       # Minutes between recordings (only used in interval mode)
   # Modes:
   #   Both true   = Record + process asynchronously (default)
-  #   Recording   = Only record videos (no processing)
+  #   Recording   = Only record videos (no recording)
   #   Processing  = Only process existing videos (no recording)
+  #   Classification off = Detection/tracking only, output has N/A predictions
+  # Recording modes:
+  #   continuous = Record non-stop, chunk after chunk with no gaps
+  #   interval   = Record one chunk, wait recording_interval_minutes, repeat
+  # Tracking modes:
+  #   continuous_tracking true  = Tracker persists across chunks (tracks can span videos)
+  #   continuous_tracking false = Full reset between videos (each video is independent)
 
 # =============================================================================
 # PATHS
 # =============================================================================
 paths:
-  video_storage: "/mnt/usb/videos"    # External USB for temp video storage
+  input_storage: "/mnt/usb/videos"    # Input directory (FLICK videos + DOT directories)
   logs_dir: "output/logs"             # Log files directory
 
 # =============================================================================
 # CAPTURE
 # =============================================================================
 capture:
-  device_id: "edge26"                 # Device identifier in filenames
   camera_index: 0                     # Camera device index
   use_picamera: true                  # true=Raspberry Pi, false=USB camera
   fps: 30                             # Frames per second
@@ -87,7 +109,11 @@ tracking:
 # =============================================================================
 # OUTPUT
 # =============================================================================
+# Output structure: results_dir/{device_id}/{date_time}/
+#   crops/        - Crop images per track
+#   composites/   - Composite images per track
+#   results.json  - Classification results
 output:
-  results_dir: "output/results"       # JSON results directory
+  results_dir: "output/results"       # Root results directory
   save_crops: true                    # Save crop images per detection
-  crops_subdir: "crops"               # Subdirectory for crops
+  save_composites: true               # Save composite images per track

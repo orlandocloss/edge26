@@ -1,13 +1,14 @@
 """
-Continuous video recorder with gapless chunk saving.
+Video recorder with continuous and interval modes.
 
-Records video continuously, saving 1-minute chunks without interruption.
-Uses a frame queue to decouple capture from writing, ensuring no gaps.
+Supports two recording modes:
+    - Continuous: gapless chunk saving, no interruption between chunks.
+    - Interval: record one chunk, release camera, wait N minutes, repeat.
 
 Architecture:
-    - Frame grabber thread captures continuously into a queue
-    - Writer thread consumes frames and writes to chunk files
-    - Double-buffering via queue ensures seamless transitions
+    - Frame grabber thread captures into a queue
+    - Main thread consumes frames and writes to chunk files
+    - Double-buffering via queue ensures seamless chunk transitions
 """
 
 import cv2
@@ -24,10 +25,11 @@ logger = logging.getLogger(__name__)
 
 class VideoRecorder:
     """
-    Continuous video recorder with gapless chunk saving.
+    Video recorder supporting continuous and interval modes.
     
-    Captures frames continuously and saves them in fixed-duration chunks
-    without any gaps between recordings. Resolution is read from the camera.
+    Saves fixed-duration video chunks to disk. Camera resolution is
+    auto-detected. Completed chunk paths are pushed to a queue for
+    downstream processing.
     """
     
     def __init__(
@@ -39,6 +41,8 @@ class VideoRecorder:
         video_queue: Optional[queue.Queue] = None,
         camera_index: int = 0,
         use_picamera: bool = False,
+        recording_mode: str = "continuous",
+        interval_minutes: float = 5,
     ):
         """
         Initialize the video recorder.
@@ -51,6 +55,8 @@ class VideoRecorder:
             video_queue: Queue to put completed video paths for downstream processing
             camera_index: Camera device index for OpenCV
             use_picamera: Use picamera2 instead of OpenCV (for Raspberry Pi)
+            recording_mode: "continuous" (no gaps) or "interval" (record every N minutes)
+            interval_minutes: Minutes between start of recordings (interval mode only)
         """
         self.output_dir = Path(output_dir)
         self.fps = fps
@@ -59,6 +65,8 @@ class VideoRecorder:
         self.video_queue = video_queue
         self.camera_index = camera_index
         self.use_picamera = use_picamera
+        self.recording_mode = recording_mode
+        self.interval_minutes = interval_minutes
         
         # Resolution will be read from camera on init
         self.resolution: Tuple[int, int] = (0, 0)
@@ -72,8 +80,12 @@ class VideoRecorder:
         
         # Threading controls
         self.stop_event = threading.Event()
+        self._grabber_stop = False
         self.camera = None
         self.grabber_thread = None
+        
+        # Last completed chunk (read by Pipeline after stop)
+        self.last_chunk_path: Optional[Path] = None
         
         # Calculate expected frames per chunk
         self.frames_per_chunk = fps * chunk_duration
@@ -81,6 +93,8 @@ class VideoRecorder:
         logger.info(f"VideoRecorder initialized:")
         logger.info(f"  Output: {self.output_dir}")
         logger.info(f"  Target FPS: {fps}, Chunk duration: {chunk_duration}s")
+        logger.info(f"  Recording mode: {recording_mode}"
+                    + (f", interval: {interval_minutes} min" if recording_mode == "interval" else ""))
     
     def _init_camera_opencv(self) -> None:
         """Initialize camera using OpenCV and read resolution."""
@@ -180,7 +194,7 @@ class VideoRecorder:
         frame_interval = 1.0 / self.fps
         next_frame_time = time.time()
         
-        while not self.stop_event.is_set():
+        while not self.stop_event.is_set() and not self._grabber_stop:
             try:
                 # Capture frame
                 frame = self._grab_frame()
@@ -278,36 +292,85 @@ class VideoRecorder:
     
     def start(self) -> None:
         """
-        Start continuous video recording.
+        Start video recording (continuous or interval).
         
         This method blocks and runs the recording loop.
         Call from a thread if you need non-blocking behavior.
         """
+        if self.recording_mode == "interval":
+            self._start_interval()
+        else:
+            self._start_continuous()
+    
+    def _start_continuous(self) -> None:
+        """Record non-stop, chunk after chunk with no gaps."""
         logger.info("Starting continuous recording...")
         
         try:
-            # Initialize camera (reads resolution)
             self._init_camera()
+            self._start_grabber()
             
-            # Start frame grabber thread
-            self.grabber_thread = threading.Thread(
-                target=self._frame_grabber_loop,
-                daemon=True
-            )
-            self.grabber_thread.start()
-            
-            # Main recording loop
             while not self.stop_event.is_set():
                 chunk_path = self._record_chunk()
-                
-                # Notify downstream processors
-                if chunk_path and self.video_queue:
-                    self.video_queue.put(chunk_path)
+                if chunk_path:
+                    self.last_chunk_path = chunk_path
+                    if self.video_queue:
+                        self.video_queue.put(chunk_path)
                     
         except Exception as e:
             logger.error(f"Recording error: {e}", exc_info=True)
         finally:
-            self._cleanup()
+            self._cleanup(final=True)
+    
+    def _start_interval(self) -> None:
+        """Record one chunk, wait, repeat."""
+        interval_seconds = self.interval_minutes * 60
+        
+        logger.info(f"Starting interval recording "
+                    f"({self.chunk_duration}s every {self.interval_minutes} min)...")
+        
+        try:
+            while not self.stop_event.is_set():
+                chunk_start = time.time()
+                
+                # Init camera, record one chunk, release camera
+                self._init_camera()
+                self._start_grabber()
+                
+                chunk_path = self._record_chunk()
+                if chunk_path:
+                    self.last_chunk_path = chunk_path
+                    if self.video_queue:
+                        self.video_queue.put(chunk_path)
+                
+                self._cleanup()
+                
+                if self.stop_event.is_set():
+                    break
+                
+                # Wait until next interval
+                elapsed = time.time() - chunk_start
+                wait_time = max(0, interval_seconds - elapsed)
+                
+                if wait_time > 0:
+                    logger.info(f"Next recording in {wait_time:.0f}s")
+                    # Sleep in small increments so stop_event is responsive
+                    wait_end = time.time() + wait_time
+                    while time.time() < wait_end and not self.stop_event.is_set():
+                        time.sleep(min(1.0, wait_end - time.time()))
+                    
+        except Exception as e:
+            logger.error(f"Recording error: {e}", exc_info=True)
+        finally:
+            self._cleanup(final=True)
+    
+    def _start_grabber(self) -> None:
+        """Start the frame grabber thread."""
+        self.grabber_thread = threading.Thread(
+            target=self._frame_grabber_loop,
+            daemon=True,
+        )
+        self.grabber_thread.start()
     
     def stop(self) -> None:
         """
@@ -318,15 +381,35 @@ class VideoRecorder:
         logger.info("Stopping recorder...")
         self.stop_event.set()
     
-    def _cleanup(self) -> None:
-        """Clean up resources."""
-        self.stop_event.set()
+    def _cleanup(self, final: bool = False) -> None:
+        """
+        Clean up camera and grabber resources.
         
-        # Wait for grabber thread
+        Args:
+            final: If True, also sets stop_event (full shutdown).
+                   If False, only tears down camera/grabber (interval pause).
+        """
+        if final:
+            self.stop_event.set()
+        
+        # Signal grabber to stop and wait
         if self.grabber_thread and self.grabber_thread.is_alive():
+            # Grabber checks stop_event; for interval pause we need a
+            # separate mechanism so we don't poison stop_event.
+            self._grabber_stop = True
             self.grabber_thread.join(timeout=2.0)
+        self._grabber_stop = False
+        self.grabber_thread = None
         
         # Release camera
         self._release_camera()
         
-        logger.info("Recorder cleanup complete")
+        # Drain any remaining frames in the queue
+        if self.frame_queue is not None:
+            while not self.frame_queue.empty():
+                try:
+                    self.frame_queue.get_nowait()
+                except queue.Empty:
+                    break
+        
+        logger.debug("Recorder resources released")
