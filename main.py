@@ -72,6 +72,7 @@ class Pipeline:
         pipeline_config = config.get("pipeline", {})
         self.enable_recording = pipeline_config.get("enable_recording", True)
         self.enable_processing = pipeline_config.get("enable_processing", True)
+        self.enable_classification = pipeline_config.get("enable_classification", True)
         self.continuous_tracking = pipeline_config.get("continuous_tracking", True)
         
         # --- Tracker reset signals (continuous_tracking mode) ---
@@ -352,7 +353,10 @@ class Pipeline:
     
     def _process_dot_directory(self, dot_dir: Path) -> None:
         """
-        Process a DOT device directory (classify crops only).
+        Process a DOT device directory.
+        
+        If classification is enabled: classify crops → write results.json.
+        If classification is disabled: copy crops + composites only (no results).
         
         DOT directory structure:
             {dot_id}_{date}_{time}/
@@ -373,9 +377,6 @@ class Pipeline:
                 logger.warning(f"Could not parse DOT directory: {dot_dir.name}")
                 return
             
-            # Classify crops
-            results = self.processor.classify_dot_directory(dot_dir)
-            
             # Compute output directory
             output_dir = self._compute_output_dir(dot_id, date_time)
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -392,20 +393,25 @@ class Pipeline:
                 shutil.copytree(src_composites, output_dir / "composites", dirs_exist_ok=True)
                 logger.info(f"  Copied composites to {output_dir / 'composites'}")
             
-            # Write results JSON
-            output_paths = self.writer.write_results(
-                results=results,
-                output_dir=output_dir,
-            )
-            
-            # Summary
-            summary = results.get("summary", {})
-            logger.info(f"DOT COMPLETE: {summary.get('confirmed_tracks', 0)} tracks classified "
-                       f"from {dot_id}")
+            # Classify and write results (only if classification enabled)
+            if self.enable_classification:
+                results = self.processor.classify_dot_directory(dot_dir)
+                
+                self.writer.write_results(
+                    results=results,
+                    output_dir=output_dir,
+                )
+                
+                summary = results.get("summary", {})
+                logger.info(f"DOT COMPLETE: {summary.get('confirmed_tracks', 0)} tracks classified "
+                           f"from {dot_id}")
+            else:
+                logger.info(f"DOT COMPLETE: copied crops/composites from {dot_id} "
+                           f"(classification disabled, no results.json)")
             
             # Delete inbox directory
             shutil.rmtree(dot_dir)
-            logger.debug(f"Deleted DOT inbox: {dot_dir.name}")
+            logger.debug(f"Deleted DOT directory: {dot_dir.name}")
             
         except Exception as e:
             logger.error(f"Failed to process DOT {dot_dir.name}: {e}", exc_info=True)
