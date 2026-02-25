@@ -134,8 +134,14 @@ class Pipeline:
             interval_minutes=pipeline_cfg.get("recording_interval_minutes", 5),
         )
     
+    def _is_flick_video(self, path: Path) -> bool:
+        """Check if a path is a FLICK video (matches flick_id prefix)."""
+        return (path.is_file()
+                and path.suffix == ".mp4"
+                and path.name.startswith(f"{self.flick_id}_"))
+    
     def _is_dot_directory(self, path: Path) -> bool:
-        """Check if a path is a DOT device directory."""
+        """Check if a path is a DOT device directory (matches a dot_id prefix)."""
         if not path.is_dir():
             return False
         return any(path.name.startswith(f"{dot_id}_") for dot_id in self.dot_ids)
@@ -145,15 +151,16 @@ class Pipeline:
         Find existing videos and DOT directories in input_storage.
         
         Returns a sorted list of (path, type) tuples where type is
-        "video" or "dot". Sorted by name gives chronological order
-        since filenames and directory names both contain timestamps.
+        "video" or "dot". Only items matching configured device IDs
+        are included. Sorted by name gives chronological order since
+        filenames and directory names both contain timestamps.
         """
         if not self.input_storage.exists():
             return []
         
         items = []
         for entry in sorted(self.input_storage.iterdir()):
-            if entry.is_file() and entry.suffix == ".mp4":
+            if self._is_flick_video(entry):
                 items.append((entry, "video"))
             elif self.dot_ids and self._is_dot_directory(entry):
                 items.append((entry, "dot"))
