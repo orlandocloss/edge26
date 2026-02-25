@@ -157,11 +157,10 @@ class Pipeline:
             # Process
             results = self.processor.process_video(video_path)
             
-            # Write results
+            # Write results (crops already saved by BugSpot in process_video)
             output_paths = self.writer.write_results(
                 results=results,
                 video_path=video_path,
-                processor=self.processor
             )
             
             # Summary
