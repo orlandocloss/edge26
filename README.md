@@ -22,7 +22,7 @@ python main.py --config config/settings.yaml
 Two device types work together:
 
 - **FLICK** — Full pipeline: record, detect, track, classify. Also classifies data received from DOTs.
-- **DOT** — Detection only: record, detect, track, extract crops/composites. Sends results to a FLICK for classification.
+- **DOT** — Detection only: record, detect, track, extract crops/labels. Sends results to a FLICK for classification.
 
 ```
 Recording Thread                    Processing Thread
@@ -37,19 +37,21 @@ Recording Thread                    Processing Thread
                   input_storage  ├──────────────────────┤
                                  │ Phase 5-6: Hailo      │
   DOT devices      DOT dirs     │   Classification      │
-  (crops only) ────────────────▶│   Aggregation         │
+  (crops+labels) ──────────────▶│   Aggregation         │
                                  └──────────┬───────────┘
                                             │
                                             ▼
                                  ┌──────────────────────┐
                                  │ output/results/       │
-                                 │   {device}/{datetime} │
+                                 │   {device}/{date}     │
                                  │   crops + composites  │
-                                 │   results.json        │
+                                 │   labels + results    │
                                  └──────────────────────┘
 ```
 
 FLICK videos pass through the full pipeline (phases 1–6). DOT directories arrive in the same `input_storage` and skip straight to classification (phases 5–6 only) — they never touch the BugSpot tracker, so continuous tracking across FLICK videos is unaffected.
+
+DOT directories persist for one full day. New tracks arrive continuously; the pipeline polls for tracks marked with a `done.txt` signal, classifies them, generates a composite from crops + background, copies outputs, and deletes the processed track from input.
 
 ### Input Storage Naming
 
@@ -59,20 +61,25 @@ The pipeline identifies items in `input_storage` by naming convention:
 input_storage/
 ├── flick01_20260204_100000.mp4          # FLICK video: {flick_id}_{YYYYMMDD}_{HHMMSS}.mp4
 ├── flick01_20260204_100100.mp4
-├── dot01_20260204_120000/               # DOT directory: {dot_id}_{YYYYMMDD}_{HHMMSS}/
-│   ├── dot01_20260204_120000_crops/     #   {name}_crops/{track_id}/frame_NNNNNN.jpg
-│   │   ├── a1b2c3d4/
+├── dot01_20260204/                      # DOT directory: {dot_id}_{YYYYMMDD}/
+│   ├── crops/                           #   Track crops (one subdir per track)
+│   │   ├── a1b2c3d4_100500/            #   {track_id}_{HHMMSS}/
 │   │   │   ├── frame_000042.jpg
-│   │   │   └── frame_000085.jpg
-│   │   └── e5f6g7h8/
+│   │   │   ├── frame_000085.jpg
+│   │   │   └── done.txt                #   Signals track is complete
+│   │   └── e5f6g7h8_101200/
 │   │       └── ...
-│   └── dot01_20260204_120000_composites/  #   {name}_composites/
-│       └── ...
+│   ├── labels/                          #   Bounding box labels
+│   │   ├── a1b2c3d4.json              #   {track_id}.json
+│   │   └── e5f6g7h8.json
+│   ├── videos/                          #   DOT video chunks
+│   │   └── dot01_20260204_100100.mp4   #   {dot_id}_{YYYYMMDD}_{HHMMSS}.mp4
+│   └── 100000_background.jpg           #   {HHMMSS}_background.jpg
 └── .last_recording                      # Tracker reset marker (auto-managed)
 ```
 
 - **FLICK videos** — `{flick_id}_{YYYYMMDD}_{HHMMSS}.mp4`. Created by the recorder, matched by `.mp4` extension.
-- **DOT directories** — `{dot_id}_{YYYYMMDD}_{HHMMSS}/`. Matched by prefix against `device.dot_ids`. Must contain a `{name}_crops/` subdirectory with track folders of crop images.
+- **DOT directories** — `{dot_id}_{YYYYMMDD}/`. Matched by prefix against `device.dot_ids`. Persist for one full day; new tracks are added continuously. A track is only processed once its `done.txt` signal appears. Composites are generated from crops + the most recent `{HHMMSS}_background.jpg`. Processed tracks, labels, and videos are copied to output then deleted from input.
 
 ## Pipeline Phases
 
@@ -81,7 +88,7 @@ input_storage/
 | 1 | BugSpot | **Detection** — GMM background subtraction, morphological filtering, shape/cohesiveness filters |
 | 2 | BugSpot | **Tracking** — Hungarian algorithm matching with lost track recovery |
 | 3 | BugSpot | **Topology** — Path analysis confirms insect-like movement vs plants/noise |
-| 4 | BugSpot | **Crops & Composites** — Re-reads video to extract per-track crop images and composite visualisations |
+| 4 | BugSpot | **Crops & Composites** — Re-reads video to extract per-track crop images and composite visualisations (FLICK) or overlays DOT crops onto background |
 | 5 | Hailo | **Classification** — HEF model predicts Family, Genus, Species per crop |
 | 6 | edge26 | **Aggregation** — Hierarchical voting across frames (best family → best genus within → best species within) |
 
@@ -124,6 +131,7 @@ pipeline:
   continuous_tracking: true           # Tracker persists across video chunks
   recording_mode: "continuous"        # "continuous" or "interval"
   recording_interval_minutes: 5       # Interval mode only
+  video_sample_interval: 10           # Save 1 video per N to output (0 = disabled)
 
 paths:
   input_storage: "/mnt/usb/videos"    # FLICK videos + DOT directories
@@ -148,15 +156,29 @@ Results are organised by device and timestamp:
 ```
 output/results/
 ├── flick01/
-│   └── 20260204_100000/
-│       ├── crops/{track_id}/frame_000075.jpg
-│       ├── composites/
-│       └── results.json
+│   ├── 20260204_100000/
+│   │   ├── crops/{track_id}/frame_000075.jpg
+│   │   ├── composites/
+│   │   ├── results.json
+│   │   └── video.mp4                    # 1 in N videos saved (first with detections)
+│   ├── 20260204_100100/
+│   │   ├── crops/
+│   │   ├── composites/
+│   │   └── results.json
+│   └── ...
 ├── dot01/
-│   └── 20260204_120000/
+│   └── 20260204/                        # One dir per day (incremental)
 │       ├── crops/
+│       │   └── a1b2c3d4_100500/        # Copied from input
+│       │       ├── frame_000042.jpg
+│       │       └── frame_000085.jpg
+│       ├── labels/
+│       │   └── a1b2c3d4.json           # Copied from input
 │       ├── composites/
-│       └── results.json
+│       │   └── a1b2c3d4_100500.jpg     # Generated: crops on background
+│       ├── videos/
+│       │   └── dot01_20260204_100100.mp4  # Copied from input
+│       └── results.json                 # Incrementally updated
 └── processing_summary.json
 ```
 

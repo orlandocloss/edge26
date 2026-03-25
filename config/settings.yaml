@@ -26,6 +26,7 @@ pipeline:
   continuous_tracking: true           # true = tracks persist across video chunks, false = reset each video
   recording_mode: "continuous"        # "continuous" = no gaps, "interval" = record every N minutes
   recording_interval_minutes: 5       # Minutes between recordings (only used in interval mode)
+  video_sample_interval: 10           # Save 1 video per N to output (0 = disabled)
   # Modes:
   #   Both true   = Record + process asynchronously (default)
   #   Recording   = Only record videos (no recording)

@@ -6,6 +6,7 @@ Adds Hailo classification and hierarchical aggregation on top.
 """
 
 import cv2
+import json
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -169,118 +170,138 @@ class VideoProcessor:
         logger.info(f"  Complete: {len(aggregated)} confirmed tracks")
         return output
     
-    def classify_dot_directory(self, dot_dir: Path) -> Dict:
+    def classify_dot_track(self, track_dir: Path, track_id: str,
+                           timestamp: Optional[str] = None) -> Optional[Dict]:
         """
-        Classify crops from a DOT device directory.
-        
-        Reads crop images organised by track, classifies each,
-        and returns results in the same JSON format as process_video.
-        
-        DOT directory structure:
-            {dot_id}_{date}_{time}/
-                {name}_crops/
-                    {track_id}/
-                        frame_000075.jpg
-                        ...
-                {name}_composites/
-                    ...
+        Classify crops from a single DOT track directory.
         
         Args:
-            dot_dir: Path to the DOT directory
+            track_dir: Path to track directory containing frame_*.jpg crops
+            track_id: Track identifier (hash only, e.g. "a1b2c3d4")
+            timestamp: Track timestamp as HHMMSS string, or None
             
         Returns:
-            Dict with classification results
+            Dict with track classification results, or None if no valid crops
         """
-        dir_name = dot_dir.name
-        crops_dir = dot_dir / f"{dir_name}_crops"
-        
-        if not crops_dir.exists():
-            raise FileNotFoundError(f"Crops directory not found: {crops_dir}")
-        
-        # Lazy-load classifier
         if self._classifier is None:
             self._classifier = HailoClassifier(self.classification_config)
         
-        logger.info("Phase 5-6: Classification + Aggregation (DOT crops)")
+        crop_files = sorted(track_dir.glob("frame_*.jpg"))
+        if not crop_files:
+            return None
         
-        tracks_data = []
-        total_classified = 0
+        classifications = []
+        frames = []
         
-        for track_dir in sorted(crops_dir.iterdir()):
-            if not track_dir.is_dir():
+        for crop_path in crop_files:
+            crop = cv2.imread(str(crop_path))
+            if crop is None:
+                logger.warning(f"Could not read crop: {crop_path}")
                 continue
             
-            track_id = track_dir.name
-            crop_files = sorted(track_dir.glob("frame_*.jpg"))
+            frame_num = int(crop_path.stem.split("_")[1])
+            classification = self._classifier.classify(crop)
+            classifications.append(classification)
             
-            if not crop_files:
-                continue
-            
-            classifications = []
-            frames = []
-            
-            for crop_path in crop_files:
-                crop = cv2.imread(str(crop_path))
-                if crop is None:
-                    logger.warning(f"Could not read crop: {crop_path}")
-                    continue
-                
-                # Parse frame number from filename: frame_000075.jpg
-                frame_num = int(crop_path.stem.split("_")[1])
-                
-                classification = self._classifier.classify(crop)
-                classifications.append(classification)
-                
-                frames.append({
-                    "frame_number": frame_num,
-                    "prediction": {
-                        "family": classification.family,
-                        "genus": classification.genus,
-                        "species": classification.species,
-                        "family_confidence": classification.family_confidence,
-                        "genus_confidence": classification.genus_confidence,
-                        "species_confidence": classification.species_confidence,
-                    }
-                })
-                
-                total_classified += 1
-            
-            if not classifications:
-                continue
-            
-            final_pred = self._classifier.hierarchical_aggregate(classifications)
-            if not final_pred:
-                continue
-            
-            tracks_data.append({
-                "track_id": track_id,
-                "final_prediction": final_pred,
-                "num_detections": len(classifications),
-                "frames": frames,
+            frames.append({
+                "frame_number": frame_num,
+                "prediction": {
+                    "family": classification.family,
+                    "genus": classification.genus,
+                    "species": classification.species,
+                    "family_confidence": classification.family_confidence,
+                    "genus_confidence": classification.genus_confidence,
+                    "species_confidence": classification.species_confidence,
+                }
             })
-            
-            logger.info(f"  Track {track_id}: {final_pred['family']} / "
-                       f"{final_pred['genus']} / {final_pred['species']} "
-                       f"({final_pred['species_confidence']:.1%})")
         
-        logger.info(f"  Classified {total_classified} crops from {len(tracks_data)} tracks")
+        if not classifications:
+            return None
         
-        # Parse timestamp from directory name
-        timestamp = self._parse_timestamp(dir_name)
+        final_pred = self._classifier.hierarchical_aggregate(classifications)
+        if not final_pred:
+            return None
         
-        return {
-            "source_device": dir_name.split("_")[0],
-            "video_file": dir_name,
-            "video_timestamp": timestamp.isoformat() if timestamp else None,
-            "processing_timestamp": datetime.now().isoformat(),
-            "summary": {
-                "total_detections": total_classified,
-                "total_tracks": len(tracks_data),
-                "confirmed_tracks": len(tracks_data),
-                "unconfirmed_tracks": 0,
-            },
-            "tracks": tracks_data,
+        result = {
+            "track_id": track_id,
+            "timestamp": timestamp,
+            "final_prediction": final_pred,
+            "num_detections": len(classifications),
+            "frames": frames,
         }
+        return result
+    
+    def create_dot_composite(self, track_dir: Path, background_path: Path,
+                             label_path: Path, output_path: Path) -> None:
+        """
+        Create a composite image by overlaying track crops onto a background.
+        
+        Uses bounding box positions from the label JSON to place each crop
+        at its detected location. Draws bounding boxes and a path line
+        connecting crop centroids.
+        
+        Args:
+            track_dir: Track directory with frame_*.jpg crops
+            background_path: Background image for this DOT day
+            label_path: Label JSON with per-frame bounding boxes
+            output_path: Where to save the composite
+        """
+        background = cv2.imread(str(background_path))
+        if background is None:
+            raise ValueError(f"Could not read background: {background_path}")
+        
+        composite = background.copy()
+        bg_h, bg_w = composite.shape[:2]
+        
+        # Load bounding boxes: {frame_number: [x, y, w, h]}
+        bboxes = {}
+        if label_path.exists():
+            try:
+                with open(label_path) as f:
+                    label_data = json.load(f)
+                if isinstance(label_data, dict):
+                    for frame_info in label_data.get("frames", []):
+                        fn = frame_info.get("frame_number")
+                        bbox = frame_info.get("bbox")
+                        if fn is not None and bbox:
+                            bboxes[fn] = bbox
+            except Exception:
+                pass
+        
+        crop_files = sorted(track_dir.glob("frame_*.jpg"))
+        centroids = []
+        
+        for crop_path in crop_files:
+            crop = cv2.imread(str(crop_path))
+            if crop is None:
+                continue
+            
+            frame_num = int(crop_path.stem.split("_")[1])
+            
+            if frame_num not in bboxes:
+                continue
+            
+            bbox = bboxes[frame_num]
+            x, y, w, h = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+            resized = cv2.resize(crop, (w, h))
+            
+            # Clip to image bounds
+            x1, y1 = max(0, x), max(0, y)
+            x2, y2 = min(bg_w, x + w), min(bg_h, y + h)
+            cx1, cy1 = x1 - x, y1 - y
+            cx2, cy2 = cx1 + (x2 - x1), cy1 + (y2 - y1)
+            
+            if x2 > x1 and y2 > y1:
+                composite[y1:y2, x1:x2] = resized[cy1:cy2, cx1:cx2]
+                cv2.rectangle(composite, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                centroids.append((x + w // 2, y + h // 2))
+        
+        # Draw path connecting centroids
+        for i in range(1, len(centroids)):
+            cv2.line(composite, centroids[i - 1], centroids[i], (0, 200, 255), 2)
+        
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(output_path), composite)
     
     def _hierarchical_aggregation(
         self,
@@ -354,6 +375,12 @@ class VideoProcessor:
     def _build_output(self, video_path: Path, video_timestamp: Optional[datetime],
                       pipeline_result, aggregated: List[Dict]) -> Dict:
         """Build final JSON output structure."""
+        # Parse device_id, date, time from filename: {device}_{YYYYMMDD}_{HHMMSS}.mp4
+        parts = video_path.stem.split("_")
+        source_device = "_".join(parts[:-2]) if len(parts) >= 3 else parts[0]
+        date_str = parts[-2] if len(parts) >= 2 else None
+        time_str = parts[-1] if len(parts) >= 2 else None
+        
         tracks_data = []
         
         for entry in aggregated:
@@ -383,6 +410,7 @@ class VideoProcessor:
             
             tracks_data.append({
                 "track_id": track_id,
+                "timestamp": time_str,
                 "final_prediction": {
                     "family": entry["final_family"],
                     "genus": entry["final_genus"],
@@ -405,6 +433,8 @@ class VideoProcessor:
         
         vi = pipeline_result.video_info
         return {
+            "source_device": source_device,
+            "date": date_str,
             "video_file": video_path.name,
             "video_timestamp": video_timestamp.isoformat() if video_timestamp else None,
             "processing_timestamp": datetime.now().isoformat(),
