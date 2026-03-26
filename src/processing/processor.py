@@ -234,24 +234,28 @@ class VideoProcessor:
     def create_dot_composite(self, track_dir: Path, background_path: Path,
                              label_path: Path, output_path: Path) -> None:
         """
-        Create a composite image by overlaying track crops onto a background.
+        Create a composite image matching BugSpot's visual style.
         
-        Uses bounding box positions from the label JSON to place each crop
-        at its detected location. Draws bounding boxes and a path line
-        connecting crop centroids.
+        Darkened background with lighten-blended crops at their bbox
+        positions, red path polyline through centroids, green start
+        marker, and detection count label.
         
         Args:
             track_dir: Track directory with frame_*.jpg crops
             background_path: Background image for this DOT day
-            label_path: Label JSON with per-frame bounding boxes
+            label_path: Label JSON with per-frame bounding boxes [x, y, w, h]
             output_path: Where to save the composite
         """
+        import numpy as np
+        
+        BG_DARKEN = 0.35
+        
         background = cv2.imread(str(background_path))
         if background is None:
             raise ValueError(f"Could not read background: {background_path}")
         
-        composite = background.copy()
-        bg_h, bg_w = composite.shape[:2]
+        composite = background.astype(np.float64) * BG_DARKEN
+        bg_h, bg_w = background.shape[:2]
         
         # Load bounding boxes: {frame_number: [x, y, w, h]}
         bboxes = {}
@@ -270,6 +274,7 @@ class VideoProcessor:
         
         crop_files = sorted(track_dir.glob("frame_*.jpg"))
         centroids = []
+        n_placed = 0
         
         for crop_path in crop_files:
             crop = cv2.imread(str(crop_path))
@@ -292,16 +297,26 @@ class VideoProcessor:
             cx2, cy2 = cx1 + (x2 - x1), cy1 + (y2 - y1)
             
             if x2 > x1 and y2 > y1:
-                composite[y1:y2, x1:x2] = resized[cy1:cy2, cx1:cx2]
-                cv2.rectangle(composite, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                region = resized[cy1:cy2, cx1:cx2].astype(np.float64)
+                composite[y1:y2, x1:x2] = np.maximum(
+                    composite[y1:y2, x1:x2], region
+                )
                 centroids.append((x + w // 2, y + h // 2))
+                n_placed += 1
         
-        # Draw path connecting centroids
-        for i in range(1, len(centroids)):
-            cv2.line(composite, centroids[i - 1], centroids[i], (0, 200, 255), 2)
+        img = np.clip(composite, 0, 255).astype(np.uint8)
+        
+        # Path polyline (red) and start marker (green)
+        if len(centroids) > 1:
+            pts = np.array(centroids, dtype=np.int32)
+            cv2.polylines(img, [pts], isClosed=False, color=(0, 0, 255), thickness=2)
+            cv2.circle(img, (pts[0][0], pts[0][1]), 6, (0, 255, 0), -1)
+        
+        cv2.putText(img, f"{n_placed} detections", (10, 25),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(output_path), composite)
+        cv2.imwrite(str(output_path), img)
     
     def _hierarchical_aggregation(
         self,
